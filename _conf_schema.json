@@ -1,0 +1,48 @@
+{
+  "base_url": {
+    "description": "监测 API 地址",
+    "type": "string",
+    "hint": "华立服务器状态聚合接口，一般无需修改。文档见 https://maimai.imikufans.cn/docs.php",
+    "default": "https://maimai.imikufans.cn/api.php"
+  },
+  "site_url": {
+    "description": "监控站地址（拼接在回复末尾供用户查看详情）",
+    "type": "string",
+    "default": "https://maimai.imikufans.cn"
+  },
+  "timeout": {
+    "description": "单次请求超时（秒）",
+    "type": "int",
+    "default": 10
+  },
+  "status_cache_ttl": {
+    "description": "服务器状态缓存（秒），文档建议 15~30",
+    "type": "int",
+    "default": 20
+  },
+  "history_cache_ttl": {
+    "description": "可用性历史缓存（秒），历史数据每小时更新一次",
+    "type": "int",
+    "default": 300
+  },
+  "static_cache_ttl": {
+    "description": "静态排行缓存（秒），top100/rating/chart145 更新频率很低",
+    "type": "int",
+    "default": 21600
+  },
+  "top_default_n": {
+    "description": "排行类指令默认展示条数（/wltop）",
+    "type": "int",
+    "default": 20
+  },
+  "chart_default_n": {
+    "description": "越级排行默认展示条数（/wlchart）",
+    "type": "int",
+    "default": 30
+  },
+  "history_default_hours": {
+    "description": "/wlhistory 默认查询小时数（1~48）",
+    "type": "int",
+    "default": 12
+  }
+}
