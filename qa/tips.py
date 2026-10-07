@@ -132,6 +132,12 @@ MUSIC_TIPS: list[str] = [
     "Let's f**king go! ——《Retribution》",
     "你别想收了这首歌！——《Retribution》",
     "巴拉巴巴巴~巴巴拉巴拉巴巴巴~ ——《コスモポップファンクラブ》",
+    "天苍苍，野茫茫，风吹草低见牛羊！争渡，争渡，惊起一滩鸥鹭！——《PANDORA PARADOXXX》",
+    "我 有 抑 郁 症 ——《PANDORA PARADOXXX》",
+    "我 治 好 了 抑 郁 症 ——《系ぎて》",
+    "我 治 好 了 抑 郁 症 ——《AFTER PANDORA》",
+    "压力巨大！压力爆炸！压力压力！巨大压力！——《Xaleid◆scopiX》",
+    "我去，是吴奇隆！——《Apollo》"
 ]
 
 TIPS: list[str] = MAIMAI_TIPS + ONGEKI_TIPS + MUSIC_TIPS
