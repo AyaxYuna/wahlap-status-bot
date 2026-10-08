@@ -12,11 +12,12 @@ from dataclasses import dataclass
 from typing import Literal
 
 Intent = Literal["status", "history", "top", "chart", "rating"]
+PageTurn = Literal["next", "prev"]
 
 
 @dataclass(frozen=True)
 class QAMatch:
-    """意图识别结果, 按需填充 hours / top_n / rating 区间."""
+    """意图识别结果, 按需填充 hours / top_n / rating 区间 / 版本."""
 
     intent: Intent
     hours: int = 0
@@ -25,6 +26,7 @@ class QAMatch:
     hi: int = 0
     lo_label: str = ""
     hi_label: str = ""
+    version: str = ""
 
 
 @dataclass(frozen=True)
@@ -280,13 +282,14 @@ def parse_rating_range(text: str) -> RatingRange | None:
 
 
 def _match_rating(text: str) -> QAMatch | None:
-    has_word = _RATING_WORD_RE.search(text) is not None
-    has_count = _RATING_COUNT_RE.search(text) is not None
-    rating_range = parse_rating_range(text)
+    version, cleaned = extract_version(text)
+    has_word = _RATING_WORD_RE.search(cleaned) is not None
+    has_count = _RATING_COUNT_RE.search(cleaned) is not None
+    rating_range = parse_rating_range(cleaned)
     if rating_range is None:
-        # 全量: "rating分布" / "rating有多少人"
+        # 全量: "rating分布" / "DX2025的rating分布"
         if has_word and has_count:
-            return QAMatch(intent="rating")
+            return QAMatch(intent="rating", version=version)
         return None
     if not (has_word or has_count):
         return None
@@ -299,7 +302,93 @@ def _match_rating(text: str) -> QAMatch | None:
         hi=rating_range.hi,
         lo_label=rating_range.lo_text,
         hi_label=rating_range.hi_text,
+        version=version,
     )
+
+
+# 版本别名: 国服写法 / 日服代号 / 牌名 / 曲库字 / 玩家代称 -> 国服 canonical label.
+# 曲库字与日服对照 (萌娘百科): 华=DX+ / 爽=Splash / 煌=Splash+ / 宙=UNiVERSE /
+#   星=UNiVERSE+ / 祭=FESTiVAL / 祝=FESTiVAL+ / 双=BUDDiES / 镜=PRiSM / 宴≈BUDDiES+.
+# 牌名: 爽煌=DX2021 / 宙星=DX2022 / 祭祝=DX2023 / 双宴=DX2024.
+# 注意 "祝" 同时出现在 DX2023 牌名(祭祝) 与 DX2024 曲库(祝+双) 中,
+# 按"有祝曲的版本"归属 DX2024 ("打完祝代双代曲"即指 DX2024).
+_VERSION_ALIASES: dict[str, str] = {
+    "dx2021": "DX2021",
+    "dx2022": "DX2022",
+    "dx2023": "DX2023",
+    "dx2024": "DX2024",
+    "dx2025": "DX2025",
+    "dx2026": "DX2026",
+    "festival": "DX2023",
+    "festival plus": "DX2024",
+    "buddies": "DX2024",
+    "buddies plus": "DX2025",
+    "prism": "DX2025",
+    "prism plus": "DX2026",
+    "universe": "DX2022",
+    "universe plus": "DX2023",
+    "splash": "DX2021",
+    "splash plus": "DX2022",
+    "爽煌": "DX2021",
+    "宙星": "DX2022",
+    "祭祝": "DX2023",
+    "双宴": "DX2024",
+    "华": "DX2021",
+    "爽": "DX2021",
+    "煌": "DX2022",
+    "宙": "DX2022",
+    "星": "DX2023",
+    "祭": "DX2023",
+    "祝": "DX2024",
+    "双": "DX2024",
+    "镜": "DX2025",
+    "宴": "DX2025",
+    "华代": "DX2021",
+    "爽代": "DX2021",
+    "煌代": "DX2022",
+    "宙代": "DX2022",
+    "星代": "DX2023",
+    "祭代": "DX2023",
+    "祝代": "DX2024",
+    "双代": "DX2024",
+    "镜代": "DX2025",
+    "宴代": "DX2025",
+}
+
+# 版本提及: 多字别名可裸匹配; 单字与裸年份必须带 版本/版/代 后缀
+# (裸 "2023" 仍视为 rating 数字, 避免吞掉区间).
+_VERSION_RE = re.compile(
+    r"(dx\s?20\d{2}"
+    r"|舞萌\s?dx?\s?20\d{2}"
+    r"|国服\s?20\d{2}"
+    r"|20\d{2}\s*(?:版本|版|代)"
+    r"|(?:dx|舞萌|国服)?\s*[华爽煌宙星祭祝双镜宴]\s*(?:版本|版|代)"
+    r"|festival\s*(?:plus|\+|＋)?|buddies\s*(?:plus|\+|＋)?|prism\s*(?:plus|\+|＋)?"
+    r"|universe\s*(?:plus|\+|＋)?|splash\s*(?:plus|\+|＋)?"
+    r"|爽煌|宙星|祭祝|双宴"
+    r"|华代|爽代|煌代|宙代|星代|祭代|祝代|双代|镜代|宴代)",
+    re.IGNORECASE,
+)
+
+
+def extract_version(text: str) -> tuple[str, str]:
+    """识别版本并返回 (canonical label, 抹掉版本词后的文本); 无版本返回 ("", 原文)."""
+    match = _VERSION_RE.search(text)
+    if match is None:
+        return "", text
+    key = match.group(0).lower().replace("+", " plus").replace("＋", " plus")
+    key = re.sub(r"\s+", " ", key).strip()
+    key = re.sub(r"^(?:dx|舞萌\s?dx?|国服)\s*", "", key)
+    key = re.sub(r"\s*(?:版本|版|代)$", "", key)
+    canonical = ""
+    if re.fullmatch(r"20\d{2}", key):
+        canonical = f"DX{key}"
+    else:
+        canonical = _VERSION_ALIASES.get(key, "")
+    if not canonical:
+        return "", text
+    cleaned = text[: match.start()] + " " + text[match.end() :]
+    return canonical, cleaned
 
 
 def _match_top(text: str, top_default: int) -> QAMatch | None:
@@ -324,11 +413,25 @@ def _match_chart(text: str, chart_default: int) -> QAMatch | None:
     return None
 
 
+# 翻页: 必须整句匹配 ("下一页"/"上一页" 类)，避免误伤正常聊天
+_PAGE_NEXT_RE = re.compile(r"^(?:翻|看|来)?\s*(?:下一页|下一頁|下页|下頁|next|下一张|下张)$", re.IGNORECASE)
+_PAGE_PREV_RE = re.compile(r"^(?:翻|看|来)?\s*(?:上一页|上一頁|上页|上頁|prev|上一张|上张)$", re.IGNORECASE)
+
+
+def match_page_turn(text: str) -> PageTurn | None:
+    """识别翻页意图; 非翻页返回 None."""
+    normalized = text.strip().lower().rstrip("。！？!?.～~")
+    if _PAGE_NEXT_RE.match(normalized) is not None:
+        return "next"
+    if _PAGE_PREV_RE.match(normalized) is not None:
+        return "prev"
+    return None
+
+
 def match_question(
     text: str,
     hours_default: int = 12,
-    top_default: int = 20,
-    chart_default: int = 30,
+    page_size: int = 20,
 ) -> QAMatch | None:
     """匹配玩家问法, 返回意图与槽位; 无关消息返回 None."""
     stripped = text.strip()
@@ -337,8 +440,8 @@ def match_question(
     # 越具体的意图越先匹配: 历史 > 排行 > 越级 > 分布 > 状态
     for matcher in (
         lambda s: _match_history(s, hours_default),
-        lambda s: _match_top(s, top_default),
-        lambda s: _match_chart(s, chart_default),
+        lambda s: _match_top(s, page_size),
+        lambda s: _match_chart(s, page_size),
         _match_rating,
         _match_status,
     ):

@@ -30,15 +30,26 @@
     "type": "int",
     "default": 21600
   },
-  "top_default_n": {
-    "description": "排行类指令默认展示条数（/wltop）",
+  "page_size": {
+    "description": "排行榜每页条数（/wltop、/wlchart 默认值）",
     "type": "int",
     "default": 20
   },
-  "chart_default_n": {
-    "description": "越级排行默认展示条数（/wlchart）",
+  "pager_expire_min": {
+    "description": "翻页记忆保留分钟数（超时后 下一页/上一页 不再响应）",
     "type": "int",
     "default": 30
+  },
+  "tip_enabled": {
+    "description": "是否在回复末尾显示 Tip",
+    "type": "bool",
+    "default": true
+  },
+  "tip_bias": {
+    "description": "Tip 偏好：偏好类以 60% 概率出现，其余两类各 20%",
+    "type": "string",
+    "default": "不设置",
+    "options": ["不设置", "舞萌类优先", "音击类优先", "乐曲空耳类优先"]
   },
   "history_default_hours": {
     "description": "/wlhistory 默认查询小时数（1~48）",
