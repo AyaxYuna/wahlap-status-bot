@@ -20,7 +20,6 @@ from .qa.tips import resolve_tip
 from .qa.pager import PagerState, is_expired, max_page, session_key, touch, turn_page
 from .qa.prompt import (
     PageTurn,
-    extract_version,
     match_page_turn,
     match_question,
     parse_hours,
@@ -37,8 +36,6 @@ from .qa.response import (
     render_rating_range,
     render_status,
     render_top100,
-    render_version_hint,
-    select_version_view,
 )
 
 DEFAULT_BASE_URL = "https://maimai.imikufans.cn/api.php"
@@ -49,11 +46,9 @@ USER_AGENT = "Mozilla/5.0 (compatible; AstrBot-plugin-wlsrvstatus/1.0)"
 _SELF_MARKERS = ("【舞萌DX", "【服务可用性】", "【全服", "【高难谱面", "【Wahlap", "📡 数据来源")
 
 
-RATING_USAGE = """查 rating 分布这样问: /wlrating [范围] [版本]
-示例: /wlrating (全部分布) / /wlrating w0-w3 / /wlrating 10000-13000 / /wlrating w15
-版本: /wlrating w0-w3 DX2025 / /wlrating DX2023 (该版本全部分布)
-w 记法: w0=10000, w5=15000, w15=11500, 上限 w99=19900
-版本写法: DX2023-DX2026 / FESTiVAL / PRiSM / 祝代 / 镜代 等"""
+RATING_USAGE = """查 rating 分布这样问: /wlrating [范围]
+示例: /wlrating (当前版本全部分布) / /wlrating w0-w3 / /wlrating 10000-13000 / /wlrating w15
+w 记法: w0=10000, w5=15000, w15=11500, 上限 w99=19900"""
 
 
 HELP_TEXT = """【Wahlap 服务器状态·指令帮助】
@@ -228,28 +223,22 @@ class WahlapStatusPlugin(Star):
 
     @filter.command("wlrating")
     async def wlrating(self, event: AstrMessageEvent) -> AsyncGenerator[MessageEventResult, None]:
-        """查看全服 Rating 分布, 可附区间与版本如 /wlrating w0-w3 DX2025"""
-        version, cleaned = extract_version(event.message_str)
-        tokens = [t for t in cleaned.split() if t != "/wlrating"]
-        rating_range = parse_rating_range(cleaned)
-        if rating_range is None and not version and tokens:
+        """查看当前版本全服 Rating 分布, 可附区间如 /wlrating w0-w3"""
+        tokens = [t for t in event.message_str.split() if t != "/wlrating"]
+        rating_range = parse_rating_range(event.message_str)
+        if rating_range is None and tokens:
             yield event.plain_result(RATING_USAGE)
             return
         data = await self._fetch("ratinglist")
         if data is None:
             yield event.plain_result(self._fail_text())
             return
-        view = select_version_view(data, version)
-        if view is None:
-            yield event.plain_result(render_version_hint(data, version))
-            return
-        scoped = {"current": view}
         if rating_range is None:
-            yield event.plain_result(render_rating(scoped, self._site_url, self._pick_tip()))
+            yield event.plain_result(render_rating(data, self._site_url, self._pick_tip()))
             return
         yield event.plain_result(
             render_rating_range(
-                scoped,
+                data,
                 self._site_url,
                 rating_range.lo,
                 rating_range.hi,

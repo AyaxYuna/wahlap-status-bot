@@ -67,26 +67,6 @@ def _bucket_key(bucket: dict[str, Any]) -> int:
     return value if isinstance(value, int) else 0
 
 
-def select_version_view(data: dict[str, Any], version: str) -> dict[str, Any] | None:
-    """按版本取数据视图; 空版本取 current; 未收录返回 None."""
-    if not version:
-        return data.get("current") or {}
-    want = version.lower()
-    for entry in data.get("versions") or []:
-        if not isinstance(entry, dict):
-            continue
-        if str(entry.get("key", "")).lower() == want or str(entry.get("label", "")).lower() == want:
-            return entry
-    return None
-
-
-def render_version_hint(data: dict[str, Any], version: str) -> str:
-    """版本未收录时的提示, 列出可用版本."""
-    labels = [str(v.get("label", "?")) for v in data.get("versions") or [] if isinstance(v, dict)]
-    known = "、".join(labels) if labels else "暂无"
-    return f"暂未收录 {version} 的数据，可用版本：{known}\n📡 {SOURCE_TAG}"
-
-
 def render_rating(data: dict[str, Any], site_url: str, tip: str | None = None) -> str:
     """渲染 GET ?api=ratinglist 的全量纯文本回复."""
     current = data.get("current") or {}
@@ -357,14 +337,10 @@ async def answer_question(match: QAMatch, ctx: AnswerContext) -> tuple[str, Page
         elif match.intent == "rating":
             data = await ctx.fetch("ratinglist", None)
             if data is not None:
-                view = select_version_view(data, match.version)
-                if view is None:
-                    return render_version_hint(data, match.version), None
-                scoped = {"current": view}
                 if match.lo == 0 and match.hi == 0:
-                    return render_rating(scoped, ctx.site_url, tip), None
+                    return render_rating(data, ctx.site_url, tip), None
                 return render_rating_range(
-                    scoped, ctx.site_url, match.lo, match.hi, match.lo_label, match.hi_label, tip
+                    data, ctx.site_url, match.lo, match.hi, match.lo_label, match.hi_label, tip
                 ), None
     except Exception:
         pass
