@@ -1,9 +1,9 @@
 {
   "base_url": {
-    "description": "监测 API 地址",
+    "description": "监测 API 地址（网关 REST 基址）",
     "type": "string",
-    "hint": "华立服务器状态聚合接口，一般无需修改。文档见 https://maimai.imikufans.cn/docs.php",
-    "default": "https://maimai.imikufans.cn/api.php"
+    "hint": "华立服务器状态聚合网关，一般无需修改。文档见 https://maimai.imikufans.cn/docs",
+    "default": "https://maiapi.imikufans.cn/api"
   },
   "site_url": {
     "description": "监控站地址（拼接在回复末尾供用户查看详情）",
@@ -51,8 +51,13 @@
     "default": "不设置",
     "options": ["不设置", "舞萌类优先", "音击类优先", "乐曲空耳类优先"]
   },
+  "mention_required": {
+    "description": "群聊中是否仅在 @机器人（或唤醒词）时响应，防误触；私聊不受影响",
+    "type": "bool",
+    "default": true
+  },
   "history_default_hours": {
-    "description": "/wlhistory 默认查询小时数（1~48）",
+    "description": "/wlhistory 默认查询小时数（1~168）",
     "type": "int",
     "default": 12
   }

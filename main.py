@@ -29,6 +29,7 @@ from .qa.prompt import (
 from .qa.response import (
     AnswerContext,
     answer_question,
+    pick_current_version,
     render_chart145,
     render_fail,
     render_history,
@@ -38,9 +39,20 @@ from .qa.response import (
     render_top100,
 )
 
-DEFAULT_BASE_URL = "https://maimai.imikufans.cn/api.php"
+DEFAULT_BASE_URL = "https://maiapi.imikufans.cn/api"
 DEFAULT_SITE_URL = "https://maimai.imikufans.cn"
 USER_AGENT = "Mozilla/5.0 (compatible; AstrBot-plugin-wlsrvstatus/1.0)"
+
+# 逻辑接口 -> 网关 REST 路径 (文档 https://maimai.imikufans.cn/docs).
+# status 走 overview (状态原字段 + 12h 可用率 + 进行中事件, 一次拿齐);
+# history 走 services/availability (各服务可用率, hours 最大 168).
+_ROUTES = {
+    "status": "overview",
+    "history": "services/availability",
+    "top100": "top100",
+    "chart145": "chart145",
+    "ratinglist": "ratinglist",
+}
 
 # 本插件自己发出的回复标记, 自然问法监听时跳过, 避免自激循环
 _SELF_MARKERS = ("【舞萌DX", "【服务可用性】", "【全服", "【高难谱面", "【Wahlap", "📡 数据来源")
@@ -53,7 +65,7 @@ w 记法: w0=10000, w5=15000, w15=11500, 上限 w99=19900"""
 
 HELP_TEXT = """【Wahlap 服务器状态·指令帮助】
 /wlstatus 查看服务器实时状态
-/wlhistory [小时数] 查看服务可用性(默认12, 范围1~48)
+/wlhistory [小时数] 查看服务可用性(默认12, 范围1~168)
 /wltop [条数] 全服游玩次数排行(默认20条/页，可翻页)
 /wlrating 全服 Rating 分布
 /wlchart [条数] 高难谱面越级排行(默认20条/页，可翻页)
@@ -81,6 +93,7 @@ class WahlapStatusPlugin(Star):
         self._pager_expire: float = float(cfg.get("pager_expire_min", 30) or 30) * 60.0
         self._tip_enabled: bool = bool(cfg.get("tip_enabled", True))
         self._tip_bias: str = str(cfg.get("tip_bias", "不设置") or "不设置")
+        self._mention_required: bool = bool(cfg.get("mention_required", True))
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._pager: dict[str, PagerState] = {}
         self._last_error: str = ""
@@ -93,20 +106,20 @@ class WahlapStatusPlugin(Star):
         return self._static_ttl
 
     async def _fetch(self, api: str, extra: dict[str, Any] | None = None) -> dict[str, Any] | None:
-        """请求聚合接口, 命中缓存则直接返回; 失败返回 None 并记录原因到 _last_error."""
-        query: dict[str, Any] = {"api": api}
-        if extra:
-            query.update(extra)
-        cache_key = "&".join(f"{k}={v}" for k, v in sorted(query.items(), key=lambda kv: kv[0]))
+        """请求聚合网关, 命中缓存则直接返回; 失败返回 None 并记录原因到 _last_error."""
+        path = _ROUTES.get(api, api)
+        query: dict[str, Any] = dict(extra or {})
+        cache_key = path + "&" + "&".join(f"{k}={v}" for k, v in sorted(query.items(), key=lambda kv: kv[0]))
         now = time.monotonic()
         hit = self._cache.get(cache_key)
         if hit is not None and now - hit[0] < self._ttl_for(api):
             return hit[1]
         self._last_error = ""
+        url = self._base_url.rstrip("/") + "/" + path
         try:
             timeout = aiohttp.ClientTimeout(total=self._timeout)
             async with aiohttp.ClientSession(headers={"User-Agent": USER_AGENT}, timeout=timeout) as session:
-                async with session.get(self._base_url, params=query) as resp:
+                async with session.get(url, params=query) as resp:
                     if resp.status != 200:
                         self._last_error = f"HTTP {resp.status}"
                         return None
@@ -128,6 +141,22 @@ class WahlapStatusPlugin(Star):
 
     def _fail_text(self) -> str:
         return render_fail(self._last_error)
+
+    def _mention_ok(self, event: AstrMessageEvent) -> bool:
+        """@ 门禁: 关闭则全放行; 开启时私聊放行, 群聊需 @机器人或唤醒词."""
+        if not self._mention_required:
+            return True
+        if not event.get_group_id():
+            return True
+        if bool(getattr(event, "is_at_or_wake_command", False)):
+            return True
+        self_id = str(event.get_self_id() or "")
+        if self_id:
+            for comp in event.get_messages():
+                is_at = getattr(comp, "type", "") == "at" or type(comp).__name__ == "At"
+                if is_at and str(getattr(comp, "qq", "")) == self_id:
+                    return True
+        return False
 
     def _pick_tip(self) -> str:
         """按开关与偏好取 Tip; 关闭返回空串 (渲染层不显示 Tip 行)."""
@@ -190,6 +219,8 @@ class WahlapStatusPlugin(Star):
     @filter.command("wlstatus")
     async def wlstatus(self, event: AstrMessageEvent) -> AsyncGenerator[MessageEventResult, None]:
         """查看华立(舞萌DX)服务器实时状态"""
+        if not self._mention_ok(event):
+            return
         data = await self._fetch("status")
         if data is None:
             yield event.plain_result(self._fail_text())
@@ -199,6 +230,8 @@ class WahlapStatusPlugin(Star):
     @filter.command("wlhistory")
     async def wlhistory(self, event: AstrMessageEvent) -> AsyncGenerator[MessageEventResult, None]:
         """查看服务可用性历史, 可附时间如 /wlhistory 24 /wlhistory 2d /wlhistory 30min"""
+        if not self._mention_ok(event):
+            return
         hours = parse_hours(event.message_str, self._default_hours)
         data = await self._fetch("history", {"hours": hours})
         if data is None:
@@ -209,6 +242,8 @@ class WahlapStatusPlugin(Star):
     @filter.command("wltop")
     async def wltop(self, event: AstrMessageEvent) -> AsyncGenerator[MessageEventResult, None]:
         """查看全服游玩次数排行, 可附每页条数如 /wltop 20 (默认按配置分页)"""
+        if not self._mention_ok(event):
+            return
         per_page = parse_top_n(event.message_str, self._page_size)
         data = await self._fetch("top100")
         if data is None:
@@ -224,6 +259,8 @@ class WahlapStatusPlugin(Star):
     @filter.command("wlrating")
     async def wlrating(self, event: AstrMessageEvent) -> AsyncGenerator[MessageEventResult, None]:
         """查看当前版本全服 Rating 分布, 可附区间如 /wlrating w0-w3"""
+        if not self._mention_ok(event):
+            return
         tokens = [t for t in event.message_str.split() if t != "/wlrating"]
         rating_range = parse_rating_range(event.message_str)
         if rating_range is None and tokens:
@@ -233,12 +270,17 @@ class WahlapStatusPlugin(Star):
         if data is None:
             yield event.plain_result(self._fail_text())
             return
+        entry = pick_current_version(data)
+        if not entry:
+            yield event.plain_result(render_fail("暂无版本数据"))
+            return
+        scoped = {"current": entry}
         if rating_range is None:
-            yield event.plain_result(render_rating(data, self._site_url, self._pick_tip()))
+            yield event.plain_result(render_rating(scoped, self._site_url, self._pick_tip()))
             return
         yield event.plain_result(
             render_rating_range(
-                data,
+                scoped,
                 self._site_url,
                 rating_range.lo,
                 rating_range.hi,
@@ -251,6 +293,8 @@ class WahlapStatusPlugin(Star):
     @filter.command("wlchart")
     async def wlchart(self, event: AstrMessageEvent) -> AsyncGenerator[MessageEventResult, None]:
         """查看高难谱面越级排行, 可附每页条数如 /wlchart 20 (默认按配置分页)"""
+        if not self._mention_ok(event):
+            return
         per_page = parse_top_n(event.message_str, self._page_size)
         data = await self._fetch("chart145")
         if data is None:
@@ -266,6 +310,8 @@ class WahlapStatusPlugin(Star):
     @filter.command("wlnextpage")
     async def wlnextpage(self, event: AstrMessageEvent) -> AsyncGenerator[MessageEventResult, None]:
         """查看排行榜下一页 (需先用 /wltop 或 /wlchart 查一次)"""
+        if not self._mention_ok(event):
+            return
         body = await self._turn_page(event, "next")
         if body is None:
             yield event.plain_result("还没有查询过排行榜，先用 /wltop 或 /wlchart 查一次吧")
@@ -275,6 +321,8 @@ class WahlapStatusPlugin(Star):
     @filter.command("wlprevpage")
     async def wlprevpage(self, event: AstrMessageEvent) -> AsyncGenerator[MessageEventResult, None]:
         """查看排行榜上一页 (需先用 /wltop 或 /wlchart 查一次)"""
+        if not self._mention_ok(event):
+            return
         body = await self._turn_page(event, "prev")
         if body is None:
             yield event.plain_result("还没有查询过排行榜，先用 /wltop 或 /wlchart 查一次吧")
@@ -284,6 +332,8 @@ class WahlapStatusPlugin(Star):
     @filter.command("wlhelp")
     async def wlhelp(self, event: AstrMessageEvent) -> AsyncGenerator[MessageEventResult, None]:
         """显示本插件指令帮助"""
+        if not self._mention_ok(event):
+            return
         yield event.plain_result(HELP_TEXT)
 
     @filter.event_message_type(filter.EventMessageType.ALL)
@@ -293,6 +343,8 @@ class WahlapStatusPlugin(Star):
         if not text or text.startswith("/"):
             return
         if any(marker in text for marker in _SELF_MARKERS):
+            return
+        if not self._mention_ok(event):
             return
         turn = match_page_turn(text)
         if turn is not None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Callable, Protocol
 
@@ -42,23 +43,21 @@ LEVEL_MAP = {
 }
 
 
-def _block(value: Any) -> str:
-    """把单小时可用率映射为一个文本方块, 无数据用中点表示."""
-    if value is None:
-        return "·"
-    if isinstance(value, bool):
-        return "·"
-    if not isinstance(value, (int, float)):
-        return "·"
-    if value >= 99.5:
-        return "█"
-    if value >= 90:
-        return "▓"
-    if value >= 50:
-        return "▒"
-    if value > 0:
-        return "░"
-    return "✕"
+def _format_duration(sec: Any) -> str:
+    """秒 -> 人类可读时长 (进行中事件用)."""
+    try:
+        total = int(sec)
+    except (TypeError, ValueError):
+        return "--"
+    if total < 0:
+        return "--"
+    hours, rest = divmod(total, 3600)
+    minutes, seconds = divmod(rest, 60)
+    if hours > 0:
+        return f"{hours}小时{minutes}分"
+    if minutes > 0:
+        return f"{minutes}分{seconds}秒"
+    return f"{seconds}秒"
 
 
 def _bucket_key(bucket: dict[str, Any]) -> int:
@@ -67,8 +66,19 @@ def _bucket_key(bucket: dict[str, Any]) -> int:
     return value if isinstance(value, int) else 0
 
 
+def pick_current_version(data: dict[str, Any]) -> dict[str, Any]:
+    """从 ratinglist 全版本数据中选当前版本 (key 最大者, 回退首个)."""
+    entries = [v for v in (data.get("data") or []) if isinstance(v, dict)]
+    if not entries:
+        return {}
+    dated = [v for v in entries if re.fullmatch(r"dx\d+", str(v.get("key", "")).lower())]
+    if dated:
+        return max(dated, key=lambda v: str(v.get("key", "")).lower())
+    return entries[0]
+
+
 def render_rating(data: dict[str, Any], site_url: str, tip: str | None = None) -> str:
-    """渲染 GET ?api=ratinglist 的全量纯文本回复."""
+    """渲染 ratinglist 当前版本的纯文本回复 (data 为 pick_current_version 选出的版本条目)."""
     current = data.get("current") or {}
     label = current.get("label", "?")
     total = current.get("total", "--")
@@ -198,36 +208,70 @@ def render_status(data: dict[str, Any], site_url: str, tip: str | None = None) -
     if msg:
         lines += ["", f"📢 {msg}"]
 
+    history_summary = data.get("history_summary") or {}
+    uptime = history_summary.get("uptime_pct")
+    if uptime is not None:
+        avg_lat = history_summary.get("avg_latency_ms", "--")
+        lines.append(f"📊 近12小时可用率 {uptime}%｜均延迟 {avg_lat}ms")
+
+    ongoing = [i for i in (data.get("ongoing_incidents") or []) if isinstance(i, dict)]
+    for incident in ongoing[:2]:
+        lines.append(
+            f"🚨 进行中：{incident.get('verdict_text', '异常')}"
+            f"(已持续{_format_duration(incident.get('duration_sec'))})"
+        )
+
     lines += ["", f"🔗 详情 {site_url}", f"📡 {SOURCE_TAG}", *_tip_line(tip)]
     return "\n".join(lines)
 
 
+def _avail_block(ratio: Any, maint: bool) -> str:
+    """可用率柱映射为文本方块, 维护时段用 □."""
+    if maint:
+        return "□"
+    if not isinstance(ratio, (int, float)) or isinstance(ratio, bool):
+        return "·"
+    if ratio >= 0.995:
+        return "█"
+    if ratio >= 0.9:
+        return "▓"
+    if ratio >= 0.5:
+        return "▒"
+    if ratio > 0:
+        return "░"
+    return "✕"
+
+
 def render_history(data: dict[str, Any], site_url: str, tip: str | None = None) -> str:
-    """渲染 GET ?api=history 的纯文本回复, 对返回形状漂移做兼容."""
+    """渲染 GET services/availability 的纯文本回复 (网关本地采集, hours 最大 168)."""
     hours = data.get("hours", "?")
-    points = data.get("points")
-    title = f"【服务可用性】过去 {hours} 小时"
-    if isinstance(points, int):
-        title += f"(共{points}个采样点)"
-    lines = [title]
+    lines = [f"【服务可用性】过去 {hours} 小时"]
+    overall = data.get("overall_pct")
+    if overall is not None:
+        lines.append(f"全服务可用率 {overall}%")
     services = data.get("services") or []
     for svc in services:
         if not isinstance(svc, dict):
             continue
         name = str(svc.get("name", "?"))
-        uptime = svc.get("uptime")
-        uptime_str = f"{uptime}%" if isinstance(uptime, (int, float)) else "无数据"
-        hourly = svc.get("hourly") or []
-        if len(hourly) > 48:
-            hourly = hourly[-48:]
-        bar = "".join(_block(v) for v in hourly)
-        latencies = [v for v in (svc.get("latency") or []) if isinstance(v, (int, float))]
-        if latencies:
-            avg_lat = sum(latencies) / len(latencies)
-            lines.append(f"{name} 可用率 {uptime_str} 均延迟 {avg_lat:.0f}ms")
-        else:
-            lines.append(f"{name} 可用率 {uptime_str}")
-        lines.append(bar if bar else "·(无数据)")
+        pct = svc.get("availability_pct", "--")
+        avg_lat = svc.get("avg_latency_ms", "--")
+        lines.append(f"{name} 可用率 {pct}% 均延迟 {avg_lat}ms")
+    buckets = data.get("buckets") or []
+    if len(buckets) > 48:
+        buckets = buckets[-48:]
+    bar_parts: list[str] = []
+    has_maint = False
+    for b in buckets:
+        if not isinstance(b, dict):
+            continue
+        maint = bool(b.get("maint", False))
+        has_maint = has_maint or maint
+        bar_parts.append(_avail_block(b.get("ratio"), maint))
+    if bar_parts:
+        lines.append("".join(bar_parts))
+        if has_maint:
+            lines.append("(□=维护时段)")
     lines += ["", f"🔗 详情 {site_url}", f"📡 {SOURCE_TAG}", *_tip_line(tip)]
     return "\n".join(lines)
 
@@ -337,10 +381,14 @@ async def answer_question(match: QAMatch, ctx: AnswerContext) -> tuple[str, Page
         elif match.intent == "rating":
             data = await ctx.fetch("ratinglist", None)
             if data is not None:
+                entry = pick_current_version(data)
+                if not entry:
+                    return render_fail("暂无版本数据"), None
+                scoped = {"current": entry}
                 if match.lo == 0 and match.hi == 0:
-                    return render_rating(data, ctx.site_url, tip), None
+                    return render_rating(scoped, ctx.site_url, tip), None
                 return render_rating_range(
-                    data, ctx.site_url, match.lo, match.hi, match.lo_label, match.hi_label, tip
+                    scoped, ctx.site_url, match.lo, match.hi, match.lo_label, match.hi_label, tip
                 ), None
     except Exception:
         pass

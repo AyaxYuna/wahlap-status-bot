@@ -133,7 +133,7 @@ def _cn_number(text: str) -> int | None:
 
 
 def parse_hours(text: str, default: int) -> int:
-    """从文本解析小时数: 支持 {num}分钟/小时/天、中文数字、今天/今日, 钳位 1~48."""
+    """从文本解析小时数: 支持 {num}分钟/小时/天、中文数字、今天/今日, 钳位 1~168 (网关上限)."""
     match = _TIME_RE.search(text)
     if match is not None:
         num = int(match.group(1))
@@ -144,7 +144,7 @@ def parse_hours(text: str, default: int) -> int:
             hours = num * 24
         else:
             hours = num
-        return max(1, min(48, hours))
+        return max(1, min(168, hours))
     cn_match = _CN_TIME_RE.search(text)
     if cn_match is not None:
         cn_num = _cn_number(cn_match.group(1))
@@ -156,7 +156,7 @@ def parse_hours(text: str, default: int) -> int:
                 hours = cn_num * 24
             else:
                 hours = cn_num
-            return max(1, min(48, hours))
+            return max(1, min(168, hours))
     if "今天" in text or "今日" in text:
         return 24
     return default
